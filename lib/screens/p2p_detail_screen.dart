@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/p2p_user.dart';
 
 class P2PDetailScreen extends StatefulWidget {
@@ -39,7 +40,9 @@ class _P2PDetailScreenState extends State<P2PDetailScreen> {
 
   double _calculateReceived() {
     if (_amountController.text.isEmpty) return 0.0;
-    final amount = double.tryParse(_amountController.text) ?? 0.0;
+    // Нормализуем строку: заменяем запятую на точку для парсинга
+    final amountText = _amountController.text.replaceAll(',', '.');
+    final amount = double.tryParse(amountText) ?? 0.0;
     if (widget.isSelling) {
       // При продаже: USDT -> KZT
       final rate = widget.user.rateKZT * 1.225;
@@ -224,7 +227,22 @@ class _P2PDetailScreenState extends State<P2PDetailScreen> {
                           controller: _amountController,
                           style: const TextStyle(
                               color: Colors.white, fontSize: 24),
-                          keyboardType: TextInputType.number,
+                          keyboardType:
+                              TextInputType.numberWithOptions(decimal: true),
+                          inputFormatters: [
+                            // Заменяем запятую на точку при вводе
+                            FilteringTextInputFormatter.allow(
+                                RegExp(r'[0-9.,]')),
+                            TextInputFormatter.withFunction(
+                                (oldValue, newValue) {
+                              // Заменяем запятую на точку
+                              final text = newValue.text.replaceAll(',', '.');
+                              return TextEditingValue(
+                                text: text,
+                                selection: newValue.selection,
+                              );
+                            }),
+                          ],
                           decoration: const InputDecoration(
                             hintText: '0',
                             hintStyle:

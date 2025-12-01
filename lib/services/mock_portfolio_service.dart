@@ -68,16 +68,44 @@ class MockPortfolioService {
     }
   }
 
-  // Начальный баланс портфеля
-  static const double initialBalance = 12500.0;
-  static const double initialBtc = 0.15;
-  static const double initialEth = 2.5;
   // USDT в Funding аккаунте - для спот-торговли нужны USDT
   static const double initialUsdt =
       0.0; // USDT в Funding для торговли (убран баланс 5000)
   // USDT в Unified Trading аккаунте - для фьючерсов
   static const double initialUnifiedUsdt =
-      4427.0; // USDT в Unified Trading для фьючерсов (начальный баланс 4427 USD)
+      0.0; // USDT в Unified Trading для фьючерсов (начальный баланс 4427 USD)
+
+  // Начальный баланс портфеля = USDT в Funding + USDT в Unified Trading
+  // Используется для расчета ROI (Return on Investment)
+  static const double initialBalance =
+      initialUsdt + initialUnifiedUsdt; // 0 + 4427 = 4427 USD
+
+  static const double initialBtc = 0.15;
+  static const double initialEth = 2.5;
+
+  // Цены входа для моковых позиций (entryPrice)
+  static double _solEntryPrice = 124.5; // Цена входа для Solana
+  static double _ltcEntryPrice = 74.5; // Цена входа для Litecoin
+
+  /// Получить цену входа для Solana
+  static double get solEntryPrice => _solEntryPrice;
+
+  /// Получить цену входа для Litecoin
+  static double get ltcEntryPrice => _ltcEntryPrice;
+
+  /// Установить цену входа для Solana
+  static void setSolEntryPrice(double price) {
+    if (price > 0) {
+      _solEntryPrice = price;
+    }
+  }
+
+  /// Установить цену входа для Litecoin
+  static void setLtcEntryPrice(double price) {
+    if (price > 0) {
+      _ltcEntryPrice = price;
+    }
+  }
 
   // Кэш для текущих цен (обновляются из API)
   static double _btcPrice = 91000.0; // Дефолтная цена
@@ -161,6 +189,22 @@ class MockPortfolioService {
 
   /// Получить текущую цену LTC (синхронно, из кэша)
   static double get ltcPrice => _ltcPrice;
+
+  /// Установить цену SOL вручную (для моковых данных)
+  static void setSolPrice(double price) {
+    if (price > 0) {
+      _solPrice = price;
+      _lastPriceUpdate = DateTime.now();
+    }
+  }
+
+  /// Установить цену LTC вручную (для моковых данных)
+  static void setLtcPrice(double price) {
+    if (price > 0) {
+      _ltcPrice = price;
+      _lastPriceUpdate = DateTime.now();
+    }
+  }
 
   /// Принудительно обновить все цены из API
   static Future<void> refreshPrices() async {
@@ -315,6 +359,15 @@ class MockPortfolioService {
     _currentFundingUsdt = initialUsdt;
     _currentUnifiedUsdt = initialUnifiedUsdt;
     _unrealizedPnl = 0.0;
+  }
+
+  /// Добавить баланс в Funding аккаунт (пополнение)
+  static Future<void> addFundingBalance(double amount) async {
+    if (amount > 0) {
+      _currentFundingUsdt += amount;
+      // Уведомляем об изменении баланса
+      balanceNotifier.value = unifiedTradingBalance;
+    }
   }
 
   // P&L за сегодня (моковое значение)
@@ -845,5 +898,48 @@ class MockPortfolioService {
       'winRate': '68.5%',
       'totalTrades': '127',
     };
+  }
+
+  // Глобальное хранилище позиций (для доступа из разных экранов)
+  static final List<Map<String, dynamic>> _globalPositions = [];
+  static final ValueNotifier<List<Map<String, dynamic>>> positionsNotifier =
+      ValueNotifier<List<Map<String, dynamic>>>([]);
+
+  /// Получить все позиции
+  static List<Map<String, dynamic>> getPositions() {
+    return List.from(_globalPositions);
+  }
+
+  /// Добавить позицию
+  static void addPosition(Map<String, dynamic> position) {
+    _globalPositions.add(position);
+    positionsNotifier.value = List.from(_globalPositions);
+  }
+
+  /// Удалить позицию по ID
+  static void removePosition(String positionId) {
+    _globalPositions.removeWhere((p) => p['id'] == positionId);
+    positionsNotifier.value = List.from(_globalPositions);
+  }
+
+  /// Обновить позицию
+  static void updatePosition(
+      String positionId, Map<String, dynamic> updatedPosition) {
+    final index = _globalPositions.indexWhere((p) => p['id'] == positionId);
+    if (index != -1) {
+      _globalPositions[index] = updatedPosition;
+      positionsNotifier.value = List.from(_globalPositions);
+    }
+  }
+
+  /// Очистить все позиции
+  static void clearPositions() {
+    _globalPositions.clear();
+    positionsNotifier.value = [];
+  }
+
+  /// Проверить, существует ли позиция с данным символом
+  static bool hasPositionWithSymbol(String symbol) {
+    return _globalPositions.any((p) => p['symbol'] == symbol);
   }
 }

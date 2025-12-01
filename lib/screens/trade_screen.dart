@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../theme/app_theme.dart';
 import '../services/crypto_api_service.dart';
@@ -73,6 +74,8 @@ class _TradeScreenState extends State<TradeScreen>
   List<Map<String, dynamic>> _orders = []; // Активные ордера
   List<Map<String, dynamic>> _positions = []; // Открытые позиции
   double _availableBalance = 0.0; // Доступный баланс USDT (будет загружен)
+  DateTime? _lastPairChangeTime; // Время последнего переключения пары
+  Set<String> _positionsBeingClosed = {}; // Позиции, которые уже закрываются
 
   final List<String> _mainTabs = [
     'График',
@@ -125,138 +128,27 @@ class _TradeScreenState extends State<TradeScreen>
     // Запускаем периодическое обновление цен
     _startPriceUpdates();
 
-    // Инициализация моковых позиций при запуске приложения
-    _initializeMockPositions();
+    // Загружаем позиции из глобального хранилища
+    _loadPositionsFromGlobal();
+
+    // Слушаем изменения в глобальном хранилище позиций
+    MockPortfolioService.positionsNotifier
+        .addListener(_onGlobalPositionsChanged);
   }
 
-  void _initializeMockPositions() {
-    // Проверяем, что позиции еще не созданы
-    if (_positions
-        .any((p) => p['symbol'] == 'SOLUSDT' || p['symbol'] == 'LTCUSDT')) {
-      return; // Позиции уже созданы
-    }
-    // Solana позиция
-    final solanaSize = 2227.0 / 133.0; // Размер позиции
-    final solanaPosition = {
-      'id': 'solana_${DateTime.now().millisecondsSinceEpoch}',
-      'symbol': 'SOLUSDT',
-      'pair': 'SOL/USDT',
-      'side': 'Long',
-      'size': solanaSize,
-      'entryPrice': 133.0,
-      'markPrice': 133.0,
-      'leverage': 1,
-      'marginMode': 'Isolated',
-      'unrealizedPnl': 0.0,
-      'unrealizedPnlPercent': 0.0,
-      'liquidationPrice': 0.0, // Для 1x плеча ликвидация не актуальна
-      'tpPrice': null,
-      'slPrice': null,
-      'partialSize': 0.0,
-      'createdAt': DateTime.now().subtract(Duration(hours: 2)),
-    };
-
-    // LTC позиция
-    final ltcSize = 2200.0 / 82.5; // Размер позиции
-    final ltcPosition = {
-      'id': 'ltc_${DateTime.now().millisecondsSinceEpoch}',
-      'symbol': 'LTCUSDT',
-      'pair': 'LTC/USDT',
-      'side': 'Long',
-      'size': ltcSize,
-      'entryPrice': 82.5,
-      'markPrice': 82.5,
-      'leverage': 1,
-      'marginMode': 'Isolated',
-      'unrealizedPnl': 0.0,
-      'unrealizedPnlPercent': 0.0,
-      'liquidationPrice': 0.0, // Для 1x плеча ликвидация не актуальна
-      'tpPrice': null,
-      'slPrice': null,
-      'partialSize': 0.0,
-      'createdAt': DateTime.now().subtract(Duration(hours: 1)),
-    };
-
+  void _loadPositionsFromGlobal() {
+    final globalPositions = MockPortfolioService.getPositions();
     setState(() {
-      _positions.add(solanaPosition);
-      _positions.add(ltcPosition);
+      _positions = List.from(globalPositions);
     });
-
-    // Создаем ордера TP/SL
-    _createMockTpSlOrders();
   }
 
-  void _createMockTpSlOrders() {
-    // Находим позиции
-    final solanaPosition = _positions.firstWhere(
-      (p) => p['symbol'] == 'SOLUSDT',
-      orElse: () => {},
-    );
-    final ltcPosition = _positions.firstWhere(
-      (p) => p['symbol'] == 'LTCUSDT',
-      orElse: () => {},
-    );
-
-    if (solanaPosition.isNotEmpty) {
-      // Solana TP/SL: TP 145%, SL 95%
-      // TP 145% означает прибыль 145%, т.е. цена = 133 * (1 + 1.45) = 133 * 2.45 = 325.85
-      // SL 95% означает цена в 95% от входа, т.е. 133 * 0.95 = 126.35
-      final solanaTpPrice = 133.0 * 2.45; // 325.85 (прибыль 145%)
-      final solanaSlPrice = 133.0 * 0.95; // 126.35
-
-      final solanaTpSlOrder = {
-        'id': 'tpsl_solana_${DateTime.now().millisecondsSinceEpoch}',
-        'type': 'sell',
-        'pair': 'SOL/USDT',
-        'status': 'active',
-        'createdAt': DateTime.now().subtract(Duration(minutes: 30)),
-        'orderType': 'tpsl',
-        'tpPrice': solanaTpPrice,
-        'slPrice': solanaSlPrice,
-        'tpTriggerType': 'Рыночный',
-        'slTriggerType': 'Рыночный',
-        'quantity': solanaPosition['size'] as double,
-        'entryPrice': solanaPosition['entryPrice'] as double,
-      };
-
-      setState(() {
-        _orders.add(solanaTpSlOrder);
-        solanaPosition['tpPrice'] = solanaTpPrice;
-        solanaPosition['slPrice'] = solanaSlPrice;
-      });
+  void _onGlobalPositionsChanged() {
+    if (mounted) {
+      _loadPositionsFromGlobal();
+      // Обновляем P&L после изменения позиций
+      _updateAllPositionsPnl();
     }
-
-    if (ltcPosition.isNotEmpty) {
-      // LTC TP/SL: TP 90%, SL 96%
-      // TP 90% означает прибыль 90%, т.е. цена = 82.5 * (1 + 0.90) = 82.5 * 1.90 = 156.75
-      // SL 96% означает цена в 96% от входа, т.е. 82.5 * 0.96 = 79.2
-      final ltcTpPrice = 82.5 * 1.90; // 156.75 (прибыль 90%)
-      final ltcSlPrice = 82.5 * 0.96; // 79.2
-
-      final ltcTpSlOrder = {
-        'id': 'tpsl_ltc_${DateTime.now().millisecondsSinceEpoch}',
-        'type': 'sell',
-        'pair': 'LTC/USDT',
-        'status': 'active',
-        'createdAt': DateTime.now().subtract(Duration(minutes: 20)),
-        'orderType': 'tpsl',
-        'tpPrice': ltcTpPrice,
-        'slPrice': ltcSlPrice,
-        'tpTriggerType': 'Рыночный',
-        'slTriggerType': 'Рыночный',
-        'quantity': ltcPosition['size'] as double,
-        'entryPrice': ltcPosition['entryPrice'] as double,
-      };
-
-      setState(() {
-        _orders.add(ltcTpSlOrder);
-        ltcPosition['tpPrice'] = ltcTpPrice;
-        ltcPosition['slPrice'] = ltcSlPrice;
-      });
-    }
-
-    // Обновляем P&L после создания позиций
-    _updateAllPositionsPnl();
   }
 
   void _onPairChanged() {
@@ -270,6 +162,8 @@ class _TradeScreenState extends State<TradeScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     widget.pairNotifier?.removeListener(_onPairChanged);
+    MockPortfolioService.positionsNotifier
+        .removeListener(_onGlobalPositionsChanged);
     _priceController.dispose();
     _quantityController.dispose();
     _totalController.dispose();
@@ -292,6 +186,9 @@ class _TradeScreenState extends State<TradeScreen>
   // Метод для обновления выбранной пары извне
   void updateSelectedPair(String pair) {
     if (_selectedPair != pair) {
+      // Сначала обновляем время переключения, чтобы защита сработала сразу
+      _lastPairChangeTime = DateTime.now();
+
       setState(() {
         _selectedPair = pair;
       });
@@ -525,8 +422,11 @@ class _TradeScreenState extends State<TradeScreen>
           'createdAt': DateTime.now(),
         };
 
+        // Добавляем в глобальное хранилище
+        MockPortfolioService.addPosition(position);
+
         setState(() {
-          _positions.add(position);
+          _positions = List.from(MockPortfolioService.getPositions());
         });
 
         // Обновляем баланс после создания позиции (с учетом замороженной маржи)
@@ -584,8 +484,11 @@ class _TradeScreenState extends State<TradeScreen>
           'createdAt': DateTime.now(),
         };
 
+        // Добавляем в глобальное хранилище
+        MockPortfolioService.addPosition(position);
+
         setState(() {
-          _positions.add(position);
+          _positions = List.from(MockPortfolioService.getPositions());
         });
 
         // Обновляем баланс после создания позиции (с учетом замороженной маржи)
@@ -699,6 +602,27 @@ class _TradeScreenState extends State<TradeScreen>
       final positionSymbol = position['symbol'] as String;
       final positionPair = position['pair'] as String;
 
+      // Обновляем entryPrice только для старых моковых позиций (solana_/ltc_),
+      // а не для позиций, созданных пользователем через экран создания
+      final positionId = position['id']?.toString() ?? '';
+      if (positionSymbol == 'SOLUSDT' &&
+          MockPortfolioService.useMockData &&
+          positionId.startsWith('solana_')) {
+        final newEntryPrice = MockPortfolioService.solEntryPrice;
+        final currentEntryPrice = position['entryPrice'] as double;
+        if (newEntryPrice != currentEntryPrice) {
+          _updateMockPositionEntryPrice(position, newEntryPrice, 'SOLUSDT');
+        }
+      } else if (positionSymbol == 'LTCUSDT' &&
+          MockPortfolioService.useMockData &&
+          positionId.startsWith('ltc_')) {
+        final newEntryPrice = MockPortfolioService.ltcEntryPrice;
+        final currentEntryPrice = position['entryPrice'] as double;
+        if (newEntryPrice != currentEntryPrice) {
+          _updateMockPositionEntryPrice(position, newEntryPrice, 'LTCUSDT');
+        }
+      }
+
       // Если это текущая пара, используем актуальную цену
       if (positionPair == _selectedPair && _currentCoin != null) {
         _updateSinglePositionPnl(position, _currentCoin!.price);
@@ -751,13 +675,81 @@ class _TradeScreenState extends State<TradeScreen>
     }
   }
 
+  // Обновление entryPrice для моковой позиции
+  void _updateMockPositionEntryPrice(
+      Map<String, dynamic> position, double newEntryPrice, String symbol) {
+    final oldEntryPrice = position['entryPrice'] as double;
+    final size = position['size'] as double;
+
+    // Обновляем entryPrice
+    position['entryPrice'] = newEntryPrice;
+
+    // Пересчитываем размер позиции, чтобы сохранить ту же стоимость
+    // Старая стоимость = oldEntryPrice * size
+    // Новая стоимость должна быть такой же
+    final oldValue = oldEntryPrice * size;
+    final newSize = oldValue / newEntryPrice;
+    position['size'] = newSize;
+
+    // Пересчитываем TP/SL на основе нового entryPrice
+    if (symbol == 'SOLUSDT') {
+      // Solana TP/SL: TP 145%, SL 95%
+      final solanaTpPrice =
+          newEntryPrice * 2.45; // 124.5 * 2.45 = 305.025 (прибыль 145%)
+      final solanaSlPrice = newEntryPrice * 0.95; // 124.5 * 0.95 = 118.275
+
+      position['tpPrice'] = solanaTpPrice;
+      position['slPrice'] = solanaSlPrice;
+
+      // Обновляем TP/SL ордер
+      final tpSlOrder = _orders.firstWhere(
+        (o) => o['orderType'] == 'tpsl' && o['pair'] == 'SOL/USDT',
+        orElse: () => {},
+      );
+      if (tpSlOrder.isNotEmpty) {
+        tpSlOrder['tpPrice'] = solanaTpPrice;
+        tpSlOrder['slPrice'] = solanaSlPrice;
+        tpSlOrder['entryPrice'] = newEntryPrice;
+        tpSlOrder['quantity'] = newSize;
+      }
+    } else if (symbol == 'LTCUSDT') {
+      // LTC TP/SL: TP 90%, SL 96%
+      final ltcTpPrice =
+          newEntryPrice * 1.90; // 74.5 * 1.90 = 141.55 (прибыль 90%)
+      final ltcSlPrice = newEntryPrice * 0.96; // 74.5 * 0.96 = 71.52
+
+      position['tpPrice'] = ltcTpPrice;
+      position['slPrice'] = ltcSlPrice;
+
+      // Обновляем TP/SL ордер
+      final tpSlOrder = _orders.firstWhere(
+        (o) => o['orderType'] == 'tpsl' && o['pair'] == 'LTC/USDT',
+        orElse: () => {},
+      );
+      if (tpSlOrder.isNotEmpty) {
+        tpSlOrder['tpPrice'] = ltcTpPrice;
+        tpSlOrder['slPrice'] = ltcSlPrice;
+        tpSlOrder['entryPrice'] = newEntryPrice;
+        tpSlOrder['quantity'] = newSize;
+      }
+    }
+  }
+
   // Обновление P&L для конкретной позиции по символу
   Future<void> _updatePositionPnlForSymbol(
       Map<String, dynamic> position, String symbol) async {
     try {
-      final coin = await CryptoApiService.getCoinById(symbol);
-      if (coin != null) {
-        _updateSinglePositionPnl(position, coin.price);
+      // Для моковых позиций SOL и LTC используем цены из MockPortfolioService
+      if (symbol == 'SOLUSDT' && MockPortfolioService.useMockData) {
+        _updateSinglePositionPnl(position, MockPortfolioService.solPrice);
+      } else if (symbol == 'LTCUSDT' && MockPortfolioService.useMockData) {
+        _updateSinglePositionPnl(position, MockPortfolioService.ltcPrice);
+      } else {
+        // Для остальных позиций используем API
+        final coin = await CryptoApiService.getCoinById(symbol);
+        if (coin != null) {
+          _updateSinglePositionPnl(position, coin.price);
+        }
       }
     } catch (e) {
       // Игнорируем ошибки при обновлении
@@ -771,9 +763,100 @@ class _TradeScreenState extends State<TradeScreen>
     final size = position['size'] as double;
     final isLong = position['side'] == 'Long';
     final leverage = position['leverage'] as int;
+    final tpPrice = position['tpPrice'] as double?;
+    final slPrice = position['slPrice'] as double?;
 
     // Обновляем маркировочную цену
     position['markPrice'] = currentPrice;
+
+    // Проверка срабатывания Take Profit или Stop Loss
+    // Добавляем небольшую задержку, чтобы избежать случайного закрытия при обновлении цены
+    bool shouldClose = false;
+    String closeReason = '';
+
+    if (isLong) {
+      // Для лонг-позиции:
+      // TP срабатывает, когда цена поднимается выше TP цены
+      if (tpPrice != null && tpPrice > 0 && currentPrice >= tpPrice) {
+        shouldClose = true;
+        closeReason = 'Take Profit';
+      }
+      // SL срабатывает, когда цена падает ниже SL цены
+      else if (slPrice != null && slPrice > 0 && currentPrice <= slPrice) {
+        shouldClose = true;
+        closeReason = 'Stop Loss';
+      }
+    } else {
+      // Для шорт-позиции:
+      // TP срабатывает, когда цена падает ниже TP цены
+      if (tpPrice != null && tpPrice > 0 && currentPrice <= tpPrice) {
+        shouldClose = true;
+        closeReason = 'Take Profit';
+      }
+      // SL срабатывает, когда цена поднимается выше SL цены
+      else if (slPrice != null && slPrice > 0 && currentPrice >= slPrice) {
+        shouldClose = true;
+        closeReason = 'Stop Loss';
+      }
+    }
+
+    // Автоматическое закрытие позиции при срабатывании TP/SL
+    // Добавляем проверку, что позиция еще существует (не была закрыта вручную)
+    // И что не было недавнего переключения пары (защита от случайного закрытия)
+    if (shouldClose && mounted && _positions.contains(position)) {
+      // Проверяем, что не было недавнего переключения пары (в течение 3 секунд)
+      final timeSincePairChange = _lastPairChangeTime != null
+          ? DateTime.now().difference(_lastPairChangeTime!)
+          : const Duration(seconds: 10);
+
+      // Не закрываем позицию, если недавно переключили пару
+      if (timeSincePairChange.inSeconds < 3) {
+        return;
+      }
+
+      // Проверяем, что позиция еще не закрывается
+      final positionId = position['id'] as String? ?? '';
+      if (_positionsBeingClosed.contains(positionId)) {
+        return;
+      }
+
+      // Небольшая задержка для проверки, что цена действительно достигла TP/SL
+      Future.delayed(const Duration(milliseconds: 1000), () {
+        if (mounted && _positions.contains(position)) {
+          // Повторная проверка цены перед закрытием
+          final finalPrice = position['markPrice'] as double? ?? currentPrice;
+          final finalTpPrice = position['tpPrice'] as double?;
+          final finalSlPrice = position['slPrice'] as double?;
+
+          bool stillShouldClose = false;
+          if (isLong) {
+            if (finalTpPrice != null &&
+                finalTpPrice > 0 &&
+                finalPrice >= finalTpPrice) {
+              stillShouldClose = true;
+            } else if (finalSlPrice != null &&
+                finalSlPrice > 0 &&
+                finalPrice <= finalSlPrice) {
+              stillShouldClose = true;
+            }
+          } else {
+            if (finalTpPrice != null &&
+                finalTpPrice > 0 &&
+                finalPrice <= finalTpPrice) {
+              stillShouldClose = true;
+            } else if (finalSlPrice != null &&
+                finalSlPrice > 0 &&
+                finalPrice >= finalSlPrice) {
+              stillShouldClose = true;
+            }
+          }
+
+          if (stillShouldClose && mounted && _positions.contains(position)) {
+            _closePositionByTpSl(position, closeReason);
+          }
+        }
+      });
+    }
 
     // Расчет нереализованного P&L
     // Для фьючерсов: P&L = (markPrice - entryPrice) * size * direction
@@ -791,6 +874,93 @@ class _TradeScreenState extends State<TradeScreen>
 
     position['unrealizedPnl'] = pnl;
     position['unrealizedPnlPercent'] = pnlPercent;
+  }
+
+  // Закрытие позиции по TP/SL
+  Future<void> _closePositionByTpSl(
+      Map<String, dynamic> position, String reason) async {
+    if (!mounted) return;
+
+    final positionId = position['id'] as String? ?? '';
+
+    // Проверяем, что позиция еще не закрывается
+    if (_positionsBeingClosed.contains(positionId)) {
+      return;
+    }
+
+    // Помечаем позицию как закрывающуюся
+    _positionsBeingClosed.add(positionId);
+
+    final unrealizedPnl = position['unrealizedPnl'] as double? ?? 0.0;
+    final size = position['size'] as double;
+    final entryPrice = position['entryPrice'] as double;
+    final positionPair = position['pair'] as String;
+
+    // Для всех позиций возвращаем только P&L
+    // Маржа НЕ вычиталась при создании моковых позиций, поэтому не возвращаем её
+    // Возвращаем только реализованный P&L
+    final margin = entryPrice * size;
+    final maxPnl = margin * 10; // Максимальный P&L = 10x от маржи
+    final limitedPnl = unrealizedPnl.clamp(
+        -margin, maxPnl); // P&L не может быть больше -100% или +1000%
+
+    // Возвращаем только P&L (маржа не вычиталась при создании моковых позиций)
+    final totalToAdd = limitedPnl; // Только P&L для всех позиций
+
+    // Собираем ордера для удаления
+    final ordersToRemove = _orders.where((o) {
+      final orderType = o['orderType'] as String?;
+      final orderPair = o['pair'] as String?;
+      return orderType == 'tpsl' && orderPair == positionPair;
+    }).toList();
+
+    // Добавляем средства на баланс единого торгового аккаунта
+    if (totalToAdd != 0.0) {
+      MockPortfolioService.realizePnl(totalToAdd);
+    }
+
+    if (mounted) {
+      // Удаляем из глобального хранилища
+      final positionId = position['id'] as String? ?? position['id'].toString();
+      MockPortfolioService.removePosition(positionId);
+
+      setState(() {
+        // Обновляем локальный список из глобального хранилища
+        _positions = List.from(MockPortfolioService.getPositions());
+
+        // Удаляем связанные TP/SL ордера при закрытии позиции
+        for (var order in ordersToRemove) {
+          _orders.remove(order);
+        }
+      });
+
+      // Показываем уведомление о закрытии
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Позиция ${positionPair} закрыта: $reason'),
+          backgroundColor: reason == 'Take Profit'
+              ? AppTheme.primaryGreen
+              : AppTheme.primaryRed,
+          duration: Duration(seconds: 3),
+        ),
+      );
+
+      // Обновляем P&L после закрытия позиции
+      Future.microtask(() async {
+        if (!mounted) return;
+        await _updateAllPositionsPnl();
+        // Уведомляем об изменении баланса
+        if (mounted) {
+          MockPortfolioService.balanceNotifier.value =
+              MockPortfolioService.unifiedTradingBalance;
+          if (mounted) {
+            await _loadAvailableBalance();
+          }
+        }
+        // Удаляем позицию из списка закрывающихся
+        _positionsBeingClosed.remove(positionId);
+      });
+    }
   }
 
   Future<void> _loadCurrentCoin() async {
@@ -837,8 +1007,12 @@ class _TradeScreenState extends State<TradeScreen>
         _updatePriceFromCurrentCoin();
         // Обновляем баланс при смене монеты (на случай если баланс изменился)
         _loadAvailableBalance();
-        // Обновляем P&L всех позиций
-        _updateAllPositionsPnl();
+        // Обновляем P&L всех позиций с задержкой, чтобы защита от закрытия успела сработать
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (mounted) {
+            _updateAllPositionsPnl();
+          }
+        });
       }
     } catch (e) {
       // Ошибка загрузки
@@ -1231,12 +1405,8 @@ class _TradeScreenState extends State<TradeScreen>
 
                                         return GestureDetector(
                                           onTap: () {
-                                            setState(() {
-                                              _selectedPair = pair;
-                                            });
-                                            _loadChartData();
-                                            _loadCurrentCoin();
-                                            _loadOrderBook();
+                                            // Используем updateSelectedPair для правильного обновления времени переключения
+                                            updateSelectedPair(pair);
                                             Navigator.pop(context);
                                           },
                                           child: Container(
@@ -4076,6 +4246,18 @@ class _TradeScreenState extends State<TradeScreen>
                     ),
                     keyboardType:
                         TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [
+                      // Заменяем запятую на точку при вводе
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                      TextInputFormatter.withFunction((oldValue, newValue) {
+                        // Заменяем запятую на точку
+                        final text = newValue.text.replaceAll(',', '.');
+                        return TextEditingValue(
+                          text: text,
+                          selection: newValue.selection,
+                        );
+                      }),
+                    ],
                   ),
                 ),
                 Text(
@@ -4126,6 +4308,18 @@ class _TradeScreenState extends State<TradeScreen>
                     ),
                     keyboardType:
                         TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [
+                      // Заменяем запятую на точку при вводе
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                      TextInputFormatter.withFunction((oldValue, newValue) {
+                        // Заменяем запятую на точку
+                        final text = newValue.text.replaceAll(',', '.');
+                        return TextEditingValue(
+                          text: text,
+                          selection: newValue.selection,
+                        );
+                      }),
+                    ],
                   ),
                 ),
                 Text(
@@ -6318,14 +6512,25 @@ class _TradeScreenState extends State<TradeScreen>
               final unrealizedPnl = position['unrealizedPnl'] as double? ?? 0.0;
               final size = position['size'] as double;
               final entryPrice = position['entryPrice'] as double;
-              final markPrice = position['markPrice'] as double? ?? entryPrice;
               final symbol = position['symbol'] as String;
 
-              // Для моковых позиций (Solana и LTC) возвращаем markPrice * size на баланс
-              final isMockPosition = symbol == 'SOLUSDT' || symbol == 'LTCUSDT';
-              final totalToAdd = isMockPosition
-                  ? markPrice * size // Цена маркировки * количество позиций
-                  : unrealizedPnl; // Только P&L для других позиций
+              // Для всех позиций возвращаем только P&L
+              // Маржа НЕ вычиталась при создании моковых позиций, поэтому не возвращаем её
+              // Возвращаем только реализованный P&L
+              final margin = entryPrice * size;
+              final maxPnl = margin * 10; // Максимальный P&L = 10x от маржи
+              final limitedPnl = unrealizedPnl.clamp(
+                  -margin, maxPnl); // P&L не может быть больше -100% или +1000%
+
+              // Возвращаем только P&L (маржа не вычиталась при создании моковых позиций)
+              final totalToAdd = limitedPnl; // Только P&L для всех позиций
+
+              // Отладочная информация (можно убрать позже)
+              print('Закрытие позиции: $symbol');
+              print('  Маржа: $margin (entryPrice: $entryPrice, size: $size)');
+              print('  P&L: $unrealizedPnl (ограничен: $limitedPnl)');
+              print(
+                  '  Итого на счет: $totalToAdd (только P&L, маржа не возвращается)');
 
               // Сохраняем пару позиции для удаления ордеров
               final positionPair = position['pair'] as String;
@@ -6342,9 +6547,14 @@ class _TradeScreenState extends State<TradeScreen>
                 MockPortfolioService.realizePnl(totalToAdd);
               }
 
+              // Удаляем из глобального хранилища
+              final positionId =
+                  position['id'] as String? ?? position['id'].toString();
+              MockPortfolioService.removePosition(positionId);
+
               setState(() {
-                // Удаляем позицию
-                _positions.remove(position);
+                // Обновляем локальный список из глобального хранилища
+                _positions = List.from(MockPortfolioService.getPositions());
 
                 // Удаляем связанные TP/SL ордера при закрытии позиции
                 for (var order in ordersToRemove) {
@@ -6658,7 +6868,9 @@ class _TpSlDialogContentState extends State<_TpSlDialogContent> {
   }
 
   void _updateTpRoiFromPrice() {
-    final tpPrice = double.tryParse(tpPriceController.text) ?? entryPrice;
+    // Нормализуем строку: заменяем запятую на точку для парсинга
+    final tpPriceText = tpPriceController.text.replaceAll(',', '.');
+    final tpPrice = double.tryParse(tpPriceText) ?? entryPrice;
     if (isLong) {
       tpRoi = ((tpPrice / entryPrice) - 1) * 100;
     } else {
@@ -6668,7 +6880,9 @@ class _TpSlDialogContentState extends State<_TpSlDialogContent> {
   }
 
   void _updateSlRoiFromPrice() {
-    final slPrice = double.tryParse(slPriceController.text) ?? entryPrice;
+    // Нормализуем строку: заменяем запятую на точку для парсинга
+    final slPriceText = slPriceController.text.replaceAll(',', '.');
+    final slPrice = double.tryParse(slPriceText) ?? entryPrice;
     if (isLong) {
       slRoi = (1 - (slPrice / entryPrice)) * 100;
     } else {
@@ -6941,6 +7155,21 @@ class _TpSlDialogContentState extends State<_TpSlDialogContent> {
                                   keyboardType:
                                       const TextInputType.numberWithOptions(
                                           decimal: true),
+                                  inputFormatters: [
+                                    // Заменяем запятую на точку при вводе
+                                    FilteringTextInputFormatter.allow(
+                                        RegExp(r'[0-9.,]')),
+                                    TextInputFormatter.withFunction(
+                                        (oldValue, newValue) {
+                                      // Заменяем запятую на точку
+                                      final text =
+                                          newValue.text.replaceAll(',', '.');
+                                      return TextEditingValue(
+                                        text: text,
+                                        selection: newValue.selection,
+                                      );
+                                    }),
+                                  ],
                                   decoration: InputDecoration(
                                     border: InputBorder.none,
                                     isDense: true,
@@ -7170,6 +7399,21 @@ class _TpSlDialogContentState extends State<_TpSlDialogContent> {
                                   keyboardType:
                                       const TextInputType.numberWithOptions(
                                           decimal: true),
+                                  inputFormatters: [
+                                    // Заменяем запятую на точку при вводе
+                                    FilteringTextInputFormatter.allow(
+                                        RegExp(r'[0-9.,]')),
+                                    TextInputFormatter.withFunction(
+                                        (oldValue, newValue) {
+                                      // Заменяем запятую на точку
+                                      final text =
+                                          newValue.text.replaceAll(',', '.');
+                                      return TextEditingValue(
+                                        text: text,
+                                        selection: newValue.selection,
+                                      );
+                                    }),
+                                  ],
                                   decoration: InputDecoration(
                                     border: InputBorder.none,
                                     isDense: true,
@@ -7365,8 +7609,11 @@ class _TpSlDialogContentState extends State<_TpSlDialogContent> {
             child: ElevatedButton(
               onPressed: () {
                 // Сохраняем TP/SL в позицию
-                final tpPrice = double.tryParse(tpPriceController.text) ?? 0.0;
-                final slPrice = double.tryParse(slPriceController.text) ?? 0.0;
+                // Нормализуем строки: заменяем запятую на точку для парсинга
+                final tpPriceText = tpPriceController.text.replaceAll(',', '.');
+                final slPriceText = slPriceController.text.replaceAll(',', '.');
+                final tpPrice = double.tryParse(tpPriceText) ?? 0.0;
+                final slPrice = double.tryParse(slPriceText) ?? 0.0;
 
                 widget.onSave(
                   tpPrice > 0 ? tpPrice : null,

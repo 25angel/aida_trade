@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../theme/app_theme.dart';
 import '../services/crypto_api_service.dart';
 import '../services/mock_portfolio_service.dart';
@@ -97,7 +98,9 @@ class _TransferScreenState extends State<TransferScreen> {
   }
 
   Future<void> _handleTransfer() async {
-    final amount = double.tryParse(_amountController.text) ?? 0.0;
+    // Нормализуем строку: заменяем запятую на точку для парсинга
+    final amountText = _amountController.text.replaceAll(',', '.');
+    final amount = double.tryParse(amountText) ?? 0.0;
 
     if (amount <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -483,6 +486,18 @@ class _TransferScreenState extends State<TransferScreen> {
                 contentPadding: EdgeInsets.zero,
               ),
               keyboardType: TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                // Заменяем запятую на точку при вводе
+                FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                TextInputFormatter.withFunction((oldValue, newValue) {
+                  // Заменяем запятую на точку
+                  final text = newValue.text.replaceAll(',', '.');
+                  return TextEditingValue(
+                    text: text,
+                    selection: newValue.selection,
+                  );
+                }),
+              ],
             ),
           ),
           GestureDetector(

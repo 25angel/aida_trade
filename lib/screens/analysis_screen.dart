@@ -227,7 +227,32 @@ class _AnalysisScreenState extends State<AnalysisScreen>
   String _getHistoricalPnlPercent() {
     if (!MockPortfolioService.useMockData) return '0.00%';
     final pnlValue = _getHistoricalPnlValue();
-    final percent = (pnlValue / MockPortfolioService.initialBalance) * 100;
+    // Используем текущий баланс минус P&L для расчета начального баланса
+    final currentBalance = MockPortfolioService.totalUsd;
+    final initialBalance = currentBalance - pnlValue;
+    if (initialBalance <= 0 ||
+        initialBalance.isNaN ||
+        initialBalance.isInfinite) {
+      return '0.00%';
+    }
+    final percent = (pnlValue / initialBalance) * 100;
+    if (percent.isNaN || percent.isInfinite) {
+      return '0.00%';
+    }
+    return '${percent >= 0 ? '+' : ''}${percent.toStringAsFixed(2)}%';
+  }
+
+  String _getPnlTodayPercent() {
+    if (!MockPortfolioService.useMockData) return '0.00%';
+    final pnlToday = MockPortfolioService.pnlToday;
+    final totalUsd = MockPortfolioService.totalUsd;
+    if (totalUsd == 0 || totalUsd.isNaN || totalUsd.isInfinite) {
+      return '0.00%';
+    }
+    final percent = (pnlToday / totalUsd) * 100;
+    if (percent.isNaN || percent.isInfinite) {
+      return '0.00%';
+    }
     return '${percent >= 0 ? '+' : ''}${percent.toStringAsFixed(2)}%';
   }
 
@@ -566,7 +591,7 @@ class _AnalysisScreenState extends State<AnalysisScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppTheme.backgroundDark,
+      backgroundColor: const Color.fromARGB(255, 0, 0, 0),
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
@@ -658,7 +683,7 @@ class _AnalysisScreenState extends State<AnalysisScreen>
                       ? '${MockPortfolioService.pnlToday >= 0 ? '+' : ''}${MockPortfolioService.pnlToday.toStringAsFixed(2)}'
                       : '0.00',
                   MockPortfolioService.useMockData
-                      ? '${((MockPortfolioService.pnlToday / MockPortfolioService.totalUsd) * 100).toStringAsFixed(2)}%'
+                      ? _getPnlTodayPercent()
                       : '0%',
                   isPositive: MockPortfolioService.useMockData
                       ? MockPortfolioService.pnlToday >= 0
@@ -738,7 +763,7 @@ class _AnalysisScreenState extends State<AnalysisScreen>
             '2025-11-25',
             style: TextStyle(
               color: AppTheme.textSecondary,
-              fontSize: 12,
+              fontSize: 10,
             ),
           ),
           const SizedBox(height: 4),
@@ -2383,7 +2408,7 @@ class _AnalysisScreenState extends State<AnalysisScreen>
         height: 200,
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: AppTheme.backgroundCard,
+          color: const Color.fromARGB(255, 0, 0, 0),
           borderRadius: BorderRadius.circular(12),
         ),
         child: LineChart(
@@ -2391,11 +2416,11 @@ class _AnalysisScreenState extends State<AnalysisScreen>
             gridData: FlGridData(
               show: true,
               drawVerticalLine: false,
-              horizontalInterval: 25,
+              horizontalInterval: 55,
               getDrawingHorizontalLine: (value) {
                 return FlLine(
-                  color: AppTheme.borderColor,
-                  strokeWidth: 1,
+                  color: const Color.fromARGB(255, 47, 47, 47),
+                  strokeWidth: 0.5,
                 );
               },
             ),
@@ -2408,7 +2433,7 @@ class _AnalysisScreenState extends State<AnalysisScreen>
                     return Text(
                       value.toStringAsFixed(0),
                       style: TextStyle(
-                        color: AppTheme.textSecondary,
+                        color: const Color.fromARGB(255, 163, 150, 138),
                         fontSize: 10,
                       ),
                     );
@@ -2538,7 +2563,7 @@ class _AnalysisScreenState extends State<AnalysisScreen>
         height: 200,
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: AppTheme.backgroundCard,
+          color: const Color.fromARGB(255, 0, 0, 0),
           borderRadius: BorderRadius.circular(12),
         ),
         child: LineChart(
@@ -2549,14 +2574,14 @@ class _AnalysisScreenState extends State<AnalysisScreen>
               horizontalInterval: 25,
               getDrawingHorizontalLine: (value) {
                 return FlLine(
-                  color: AppTheme.borderColor,
+                  color: const Color.fromARGB(255, 47, 47, 47),
                   strokeWidth: 1,
                   dashArray: [5, 5],
                 );
               },
               getDrawingVerticalLine: (value) {
                 return FlLine(
-                  color: AppTheme.borderColor.withOpacity(0.3),
+                  color: const Color.fromARGB(255, 0, 0, 0).withOpacity(0.7),
                   strokeWidth: 1,
                   dashArray: [5, 5],
                 );
@@ -2666,7 +2691,7 @@ class _AnalysisScreenState extends State<AnalysisScreen>
         height: 200,
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: AppTheme.backgroundCard,
+          color: const Color.fromARGB(255, 0, 0, 0),
           borderRadius: BorderRadius.circular(12),
         ),
         child: LineChart(
@@ -2674,11 +2699,11 @@ class _AnalysisScreenState extends State<AnalysisScreen>
             gridData: FlGridData(
               show: true,
               drawVerticalLine: false,
-              horizontalInterval: 25,
+              horizontalInterval: 55,
               getDrawingHorizontalLine: (value) {
                 return FlLine(
-                  color: AppTheme.borderColor,
-                  strokeWidth: 1,
+                  color: const Color.fromARGB(255, 47, 47, 47),
+                  strokeWidth: 0.5,
                 );
               },
             ),
@@ -2827,7 +2852,7 @@ class _AnalysisScreenState extends State<AnalysisScreen>
         height: 200,
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: AppTheme.backgroundCard,
+          color: const Color.fromARGB(255, 0, 0, 0),
           borderRadius: BorderRadius.circular(12),
         ),
         child: LineChart(
@@ -2838,7 +2863,7 @@ class _AnalysisScreenState extends State<AnalysisScreen>
               horizontalInterval: 0.7,
               getDrawingHorizontalLine: (value) {
                 return FlLine(
-                  color: AppTheme.borderColor,
+                  color: const Color.fromARGB(255, 0, 0, 0),
                   strokeWidth: 1,
                 );
               },

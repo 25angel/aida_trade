@@ -7,6 +7,8 @@ import 'login_screen.dart';
 import 'analysis_screen.dart';
 import 'account_details_screen.dart';
 import 'transfer_screen.dart';
+import 'create_mock_position_screen.dart';
+import 'add_balance_screen.dart';
 
 class WalletScreen extends StatefulWidget {
   const WalletScreen({super.key});
@@ -208,9 +210,50 @@ class _WalletScreenState extends State<WalletScreen>
                     onSelected: (value) {
                       if (value == 'logout') {
                         _handleLogout();
+                      } else if (value == 'changePrice') {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) =>
+                                const CreateMockPositionScreen(),
+                          ),
+                        ).then((result) {
+                          // Если позиция была создана, обновляем данные
+                          if (result == true) {
+                            _loadAccountData();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                    'Моковая позиция создана. Перейдите в Trade для просмотра.'),
+                                backgroundColor: AppTheme.primaryGreen,
+                                duration: Duration(seconds: 3),
+                              ),
+                            );
+                          }
+                        });
+                      } else if (value == 'addBalance') {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const AddBalanceScreen(),
+                          ),
+                        ).then((result) {
+                          // Если баланс был добавлен, обновляем данные
+                          if (result == true) {
+                            _loadAccountData();
+                          }
+                        });
                       }
                     },
                     itemBuilder: (context) => [
+                      const PopupMenuItem(
+                        value: 'changePrice',
+                        child: Text('Смена Цены'),
+                      ),
+                      const PopupMenuItem(
+                        value: 'addBalance',
+                        child: Text('Добавить Баланс'),
+                      ),
                       const PopupMenuItem(
                         value: 'logout',
                         child: Text('Выйти из аккаунта'),
@@ -478,27 +521,29 @@ class _WalletScreenState extends State<WalletScreen>
                 ),
               ),
               const SizedBox(height: 16),
-              // Financial Accounts List
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Column(
-                  children: [
-                    _buildAccountItem(
-                      'Финансирования',
-                      _isLoading
-                          ? 'Загрузка...'
-                          : '${_formatBalance(_fundingBalance)} USD',
-                    ),
-                    const SizedBox(height: 12),
-                    _buildAccountItem(
-                      'Единый торговый',
-                      _isLoading
-                          ? 'Загрузка...'
-                          : '${_formatBalance(_unifiedTradingBalance)} USD',
-                    ),
-                  ],
-                ),
-              ),
+              // Content based on selected tab
+              _selectedTab == 'Аккаунт'
+                  ? Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Column(
+                        children: [
+                          _buildAccountItem(
+                            'Финансирования',
+                            _isLoading
+                                ? 'Загрузка...'
+                                : '${_formatBalance(_fundingBalance)} USD',
+                          ),
+                          const SizedBox(height: 12),
+                          _buildAccountItem(
+                            'Единый торговый',
+                            _isLoading
+                                ? 'Загрузка...'
+                                : '${_formatBalance(_unifiedTradingBalance)} USD',
+                          ),
+                        ],
+                      ),
+                    )
+                  : _buildAssetsList(),
               const SizedBox(height: 24),
             ],
           ),
@@ -592,7 +637,7 @@ class _WalletScreenState extends State<WalletScreen>
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: AppTheme.backgroundCard,
+          color: const Color.fromARGB(255, 0, 0, 0),
           borderRadius: BorderRadius.circular(12),
         ),
         child: Row(
@@ -703,5 +748,258 @@ class _WalletScreenState extends State<WalletScreen>
         }
       }
     }
+  }
+
+  Widget _buildAssetsList() {
+    final coins = MockPortfolioService.getCoinsList();
+
+    if (coins.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: const Color.fromARGB(255, 0, 0, 0),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Center(
+            child: Text(
+              'Нет активов',
+              style: TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 14,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color.fromARGB(255, 0, 0, 0),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          children: [
+            // Table Header
+            Container(
+              padding: const EdgeInsets.only(
+                  left: 0, right: 16, top: 12, bottom: 12),
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(
+                    color: AppTheme.textSecondary.withOpacity(0.1),
+                    width: 1,
+                  ),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    flex: 2,
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 0),
+                      child: Text(
+                        'Монета',
+                        textAlign: TextAlign.left,
+                        style: TextStyle(
+                          color: AppTheme.textSecondary,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    flex: 2,
+                    child: Text(
+                      'Сумма',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    flex: 2,
+                    child: Text(
+                      'P&L(USD)',
+                      textAlign: TextAlign.right,
+                      style: TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Assets List
+            ...coins.map((coin) => _buildAssetRow(coin)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAssetRow(Map<String, dynamic> coin) {
+    final coinName = coin['coin'] as String;
+    final equity = coin['equity'] as double;
+    final usdValue = coin['usdValue'] as double;
+
+    // P&L для USDT всегда 0 (стабильная монета)
+    final pnl = 0.0;
+    final pnlPercent = 0.0;
+
+    return Container(
+      padding: const EdgeInsets.only(left: 0, right: 16, top: 12, bottom: 12),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+            color: AppTheme.textSecondary.withOpacity(0.05),
+            width: 1,
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          // Coin column
+          Expanded(
+            flex: 2,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.start,
+                children: [
+                  _buildCoinIcon(coinName),
+                  const SizedBox(width: 12),
+                  Flexible(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          coinName,
+                          style: TextStyle(
+                            color: AppTheme.textPrimary,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _getCoinFullName(coinName),
+                          style: TextStyle(
+                            color: AppTheme.textSecondary,
+                            fontSize: 10,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Amount column
+          Expanded(
+            flex: 2,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Text(
+                  _formatBalance(equity),
+                  style: TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${_formatBalance(usdValue)} USD',
+                  style: TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // P&L column
+          Expanded(
+            flex: 2,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  '${pnl >= 0 ? '+' : ''}${_formatBalance(pnl)}',
+                  style: TextStyle(
+                    color:
+                        pnl >= 0 ? AppTheme.primaryGreen : AppTheme.primaryRed,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toStringAsFixed(2)}%',
+                  style: TextStyle(
+                    color:
+                        pnl >= 0 ? AppTheme.primaryGreen : AppTheme.primaryRed,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCoinIcon(String coinName) {
+    // Цвет для USDT (teal/green)
+    final color =
+        coinName == 'USDT' ? const Color(0xFF26A17B) : AppTheme.primaryGreen;
+
+    return Container(
+      width: 30,
+      height: 30,
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.2),
+        shape: BoxShape.circle,
+      ),
+      child: Center(
+        child: Text(
+          coinName.length > 4 ? coinName.substring(0, 4) : coinName,
+          style: TextStyle(
+            color: color,
+            fontSize: 8,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _getCoinFullName(String coinName) {
+    final names = {
+      'USDT': 'Tether USDT',
+      'BTC': 'Bitcoin',
+      'ETH': 'Ethereum',
+      'BNB': 'Binance Coin',
+      'SOL': 'Solana',
+      'XRP': 'Ripple',
+      'ADA': 'Cardano',
+      'DOGE': 'Dogecoin',
+    };
+    return names[coinName] ?? coinName;
   }
 }
