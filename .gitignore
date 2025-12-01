@@ -62,6 +62,7 @@ android/app/google-services.json
 .env
 .env.local
 .env.*.local
+/.env.*
 
 # IDE
 .vscode/
@@ -82,3 +83,27 @@ android/app/google-services.json
 *.xccheckout
 *.xcscmdata
 
+# Firebase build and deployment files
+/firebase-debug.log
+/firebase-debug.*.log
+.firebaserc
+
+# Firebase Hosting
+/firebase.json
+*.cache
+hosting/.cache
+
+# Firebase Functions
+/functions/node_modules/
+/functions/.env
+/functions/package-lock.json
+
+# Firebase Emulators
+/firebase-*.zip
+/.firebase/
+/emulator-ui/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
