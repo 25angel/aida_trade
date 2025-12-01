@@ -58,3 +58,27 @@ android/app/google-services.json
 *.keystore
 *.jks
 
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# iOS
+*.mode1v3
+*.mode2v3
+*.moved-aside
+*.pbxuser
+*.perspectivev3
+**/xcuserdata/
+*.xccheckout
+*.xcscmdata
+
