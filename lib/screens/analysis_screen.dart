@@ -227,15 +227,15 @@ class _AnalysisScreenState extends State<AnalysisScreen>
   String _getHistoricalPnlPercent() {
     if (!MockPortfolioService.useMockData) return '0.00%';
     final pnlValue = _getHistoricalPnlValue();
-    // Используем текущий баланс минус P&L для расчета начального баланса
+    // Используем текущий баланс как базовый для расчета процента
+    // Это дает более реалистичный процент (например, 847 / 2040 = 41.5% вместо 70%)
     final currentBalance = MockPortfolioService.totalUsd;
-    final initialBalance = currentBalance - pnlValue;
-    if (initialBalance <= 0 ||
-        initialBalance.isNaN ||
-        initialBalance.isInfinite) {
+    if (currentBalance == 0 ||
+        currentBalance.isNaN ||
+        currentBalance.isInfinite) {
       return '0.00%';
     }
-    final percent = (pnlValue / initialBalance) * 100;
+    final percent = (pnlValue / currentBalance) * 100;
     if (percent.isNaN || percent.isInfinite) {
       return '0.00%';
     }
@@ -245,11 +245,14 @@ class _AnalysisScreenState extends State<AnalysisScreen>
   String _getPnlTodayPercent() {
     if (!MockPortfolioService.useMockData) return '0.00%';
     final pnlToday = MockPortfolioService.pnlToday;
-    final totalUsd = MockPortfolioService.totalUsd;
-    if (totalUsd == 0 || totalUsd.isNaN || totalUsd.isInfinite) {
+    // Процент рассчитывается от баланса на начало дня, а не от текущего баланса
+    final balanceAtStartOfDay = MockPortfolioService.balanceAtStartOfDay;
+    if (balanceAtStartOfDay == 0 ||
+        balanceAtStartOfDay.isNaN ||
+        balanceAtStartOfDay.isInfinite) {
       return '0.00%';
     }
-    final percent = (pnlToday / totalUsd) * 100;
+    final percent = (pnlToday / balanceAtStartOfDay) * 100;
     if (percent.isNaN || percent.isInfinite) {
       return '0.00%';
     }

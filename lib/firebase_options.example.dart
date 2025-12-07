@@ -50,8 +50,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: 'YOUR_MESSAGING_SENDER_ID',
     projectId: 'YOUR_PROJECT_ID',
     storageBucket: 'YOUR_STORAGE_BUCKET',
-    iosBundleId: 'com.example.bybit',
+    iosBundleId: 'com.iyun.byba',
     iosClientId: 'YOUR_IOS_CLIENT_ID',
   );
 }
-

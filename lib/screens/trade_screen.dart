@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../theme/app_theme.dart';
+import '../config/app_constants.dart';
 import '../services/crypto_api_service.dart';
 import '../services/mock_portfolio_service.dart';
+import '../services/bybit_websocket_service.dart';
 import '../models/crypto_model.dart';
 
 class TradeScreen extends StatefulWidget {
@@ -27,7 +29,7 @@ class _TradeScreenState extends State<TradeScreen>
   String _selectedPair = 'BTC/USDT';
   String _selectedMainTab = 'График';
   String _selectedPeriod = '15мин.';
-  Set<String> _selectedIndicators = {'MA'};
+  Set<String> _selectedIndicators = {};
   String _selectedOrderTab = 'Книга ордеров';
   String _selectedMarketType =
       'Спот'; // Конвертация, Спот, Фьючерсы, Опцион, TradFi
@@ -54,12 +56,22 @@ class _TradeScreenState extends State<TradeScreen>
   int? _selectedCandleIndex;
   Offset? _touchPosition;
 
+  // Масштабирование и прокрутка графика
+  int _visibleCandles = 50; // Количество видимых свечей
+  int _chartStartIndex = 0; // Индекс первой видимой свечи
+  double _scaleFactor = 1.0; // Масштаб (1.0 = нормальный)
+  Offset _panOffset = Offset.zero; // Смещение при прокрутке
+  double _lastScale = 1.0; // Последний масштаб для жеста
+
   late TabController _indicatorTabController;
 
   // Таймер для обновления цен в реальном времени
   Timer? _priceUpdateTimer;
   Timer? _orderBookUpdateTimer;
   Timer? _fundingRateTimer;
+
+  // WebSocket для реального времени
+  BybitWebSocketService? _websocketService;
 
   // Funding Rate данные
   double _fundingRate = 0.0011; // 0.0011%
@@ -113,6 +125,7 @@ class _TradeScreenState extends State<TradeScreen>
     _loadCurrentCoin();
     _loadOrderBook();
     _loadAvailableBalance();
+    _connectWebSocket();
 
     // Инициализация контроллеров
     _priceController.addListener(_onPriceOrQuantityChanged);
@@ -151,6 +164,16 @@ class _TradeScreenState extends State<TradeScreen>
     }
   }
 
+  // Сброс масштаба и позиции графика при смене пары или периода
+  void _resetChartView() {
+    setState(() {
+      _visibleCandles = 50;
+      _chartStartIndex = 0;
+      _scaleFactor = 1.0;
+      _panOffset = Offset.zero;
+    });
+  }
+
   void _onPairChanged() {
     final newPair = widget.pairNotifier?.value;
     if (newPair != null && _selectedPair != newPair) {
@@ -172,6 +195,8 @@ class _TradeScreenState extends State<TradeScreen>
     _priceUpdateTimer?.cancel();
     _orderBookUpdateTimer?.cancel();
     _fundingRateTimer?.cancel();
+    // Отключаем WebSocket
+    _websocketService?.disconnect();
     super.dispose();
   }
 
@@ -191,11 +216,14 @@ class _TradeScreenState extends State<TradeScreen>
 
       setState(() {
         _selectedPair = pair;
+        _klines = []; // Очищаем данные графика сразу при переключении монеты
       });
+      _resetChartView(); // Сбрасываем масштаб и позицию
       // Перезагружаем данные для новой пары
       _loadChartData();
       _loadCurrentCoin();
       _loadOrderBook();
+      _connectWebSocket();
       _updatePriceFromCurrentCoin();
     }
   }
@@ -1645,22 +1673,42 @@ class _TradeScreenState extends State<TradeScreen>
   }
 
   Future<void> _loadChartData() async {
+    // Сохраняем текущую пару и период для проверки после загрузки
+    final currentPair = _selectedPair;
+    final currentPeriod = _selectedPeriod;
+
     setState(() {
       _isLoading = true;
     });
 
     try {
       final klines = await CryptoApiService.getKlines(
-        symbol: _selectedPair,
-        interval: _selectedPeriod,
+        symbol: currentPair,
+        interval: currentPeriod,
         limit: 200,
       );
 
       if (mounted) {
+        // Проверяем, что пара и период не изменились во время загрузки
+        if (_selectedPair != currentPair || _selectedPeriod != currentPeriod) {
+          // Пара или период изменились, игнорируем эти данные
+          setState(() {
+            _isLoading = false;
+          });
+          return;
+        }
+
+        // Сортируем klines по timestamp (Bybit может возвращать в обратном порядке)
+        klines.sort(
+            (a, b) => (a['timestamp'] as int).compareTo(b['timestamp'] as int));
+
         setState(() {
           _klines = klines;
           _isLoading = false;
         });
+
+        // Переподключаем WebSocket после загрузки данных
+        _connectWebSocket();
       }
     } catch (e) {
       if (mounted) {
@@ -1668,6 +1716,152 @@ class _TradeScreenState extends State<TradeScreen>
           _isLoading = false;
         });
       }
+    }
+  }
+
+  // Подключение к WebSocket для реального времени
+  Future<void> _connectWebSocket() async {
+    // Отключаем предыдущее подключение
+    await _websocketService?.disconnect();
+
+    try {
+      final symbol = _selectedPair.replaceAll('/', '');
+      String category = 'spot';
+      if (_selectedMarketType == 'Фьючерсы') {
+        category = 'linear';
+      }
+
+      // Получаем интервал из выбранного периода
+      final apiInterval = AppConstants.intervalMapping[_selectedPeriod] ?? '15';
+
+      _websocketService = BybitWebSocketService();
+      await _websocketService!.connect(
+        category: category,
+        symbol: symbol,
+        interval: apiInterval,
+        onKlineUpdate: _updateKlineFromWebSocket,
+      );
+    } catch (e) {
+      print('Error connecting WebSocket: $e');
+    }
+  }
+
+  // Плавное обновление свечи из WebSocket
+  void _updateKlineFromWebSocket(Map<String, dynamic> wsData) {
+    if (!mounted || _klines.isEmpty) {
+      print(
+          'WebSocket update skipped: mounted=$mounted, klines empty=${_klines.isEmpty}');
+      return;
+    }
+
+    try {
+      // Получаем интервал из выбранного периода
+      final apiInterval = AppConstants.intervalMapping[_selectedPeriod] ?? '15';
+
+      // Проверяем, соответствует ли интервал
+      final topic = wsData['topic']?.toString() ?? '';
+      print(
+          'WebSocket received topic: $topic, looking for: kline.$apiInterval.');
+
+      if (!topic.contains('kline.$apiInterval.')) {
+        print('WebSocket: Topic does not match interval $apiInterval');
+        return; // Не наш интервал
+      }
+
+      print('WebSocket: Processing kline update for interval $apiInterval');
+
+      // Bybit WebSocket возвращает данные в формате: {topic: "...", data: [{...}]}
+      final klineList = wsData['data'] as List<dynamic>?;
+      if (klineList == null || klineList.isEmpty) return;
+
+      final kline = klineList[0] as Map<String, dynamic>;
+
+      // Bybit возвращает: start, open, high, low, close, volume, confirm
+      final startTime = int.parse(kline['start'].toString());
+      final open = double.parse(kline['open'].toString());
+      final high = double.parse(kline['high'].toString());
+      final low = double.parse(kline['low'].toString());
+      final close = double.parse(kline['close'].toString());
+      final volume = double.parse(kline['volume'].toString());
+      final confirm = kline['confirm'] as bool? ?? false;
+
+      // Конвертируем start time в timestamp (Bybit WebSocket возвращает в миллисекундах)
+      // Если меньше 13 цифр, значит в секундах - умножаем на 1000
+      final timestamp =
+          startTime < 1000000000000 ? startTime * 1000 : startTime;
+
+      // Создаем новый список для обновления (важно для Flutter, чтобы увидел изменения)
+      final updatedKlines = List<Map<String, dynamic>>.from(_klines);
+      bool needsUpdate = false;
+
+      // Ищем последнюю свечу с таким же timestamp
+      final lastIndex = updatedKlines.length - 1;
+      if (lastIndex >= 0 &&
+          updatedKlines[lastIndex]['timestamp'] == timestamp) {
+        // Обновляем последнюю свечу (текущая формирующаяся свеча)
+        updatedKlines[lastIndex] = {
+          'timestamp': timestamp,
+          'open': open,
+          'high': high,
+          'low': low,
+          'close': close,
+          'volume': volume,
+        };
+        needsUpdate = true;
+      } else if (confirm && lastIndex >= 0) {
+        // Если свеча закрылась (confirm = true), добавляем новую
+        if (updatedKlines[lastIndex]['timestamp'] < timestamp) {
+          updatedKlines.add({
+            'timestamp': timestamp,
+            'open': open,
+            'high': high,
+            'low': low,
+            'close': close,
+            'volume': volume,
+          });
+
+          // Ограничиваем количество свечей (оставляем последние 200)
+          if (updatedKlines.length > 200) {
+            updatedKlines.removeAt(0);
+          }
+          needsUpdate = true;
+        }
+      } else {
+        // Добавляем новую свечу, если её еще нет
+        if (lastIndex < 0 ||
+            updatedKlines[lastIndex]['timestamp'] < timestamp) {
+          updatedKlines.add({
+            'timestamp': timestamp,
+            'open': open,
+            'high': high,
+            'low': low,
+            'close': close,
+            'volume': volume,
+          });
+
+          // Ограничиваем количество свечей
+          if (updatedKlines.length > 200) {
+            updatedKlines.removeAt(0);
+          }
+          needsUpdate = true;
+        }
+      }
+
+      // Обновляем состояние только если были изменения
+      if (needsUpdate && mounted) {
+        print(
+            'WebSocket: Updating chart with new kline data. Last candle: close=${updatedKlines.last['close']}, timestamp=${updatedKlines.last['timestamp']}');
+        // Создаем полностью новый список для гарантии обновления
+        setState(() {
+          _klines = List<Map<String, dynamic>>.from(updatedKlines);
+        });
+        print('WebSocket: Chart updated, klines count: ${_klines.length}');
+      } else {
+        print(
+            'WebSocket: No update needed. needsUpdate=$needsUpdate, mounted=$mounted');
+      }
+    } catch (e) {
+      print('Error updating kline from WebSocket: $e');
     }
   }
 
@@ -2521,8 +2715,12 @@ class _TradeScreenState extends State<TradeScreen>
                     onTap: () {
                       setState(() {
                         _selectedPeriod = period;
+                        _klines =
+                            []; // Очищаем данные графика сразу при переключении периода
                       });
+                      _resetChartView(); // Сбрасываем масштаб и позицию
                       _loadChartData();
+                      _connectWebSocket(); // Переподключаем WebSocket для нового периода
                     },
                     child: Container(
                       padding: const EdgeInsets.symmetric(
@@ -2898,9 +3096,30 @@ class _TradeScreenState extends State<TradeScreen>
       }
     }
 
-    // Ограничиваем количество отображаемых свечей для приближения (показываем последние 50)
-    final startIndex = _klines.length > 50 ? _klines.length - 50 : 0;
-    final displayedKlines = _klines.sublist(startIndex);
+    // Вычисляем видимую область с учетом масштаба и прокрутки
+    // Масштаб влияет на количество видимых свечей
+    final baseVisibleCandles = 50;
+    final scaledVisibleCandles =
+        (baseVisibleCandles / _scaleFactor).round().clamp(10, _klines.length);
+
+    // Вычисляем startIndex с учетом прокрутки
+    int calculatedStartIndex = _chartStartIndex;
+
+    // Если прокрутка не задана, показываем последние свечи
+    if (_chartStartIndex == 0 && _panOffset == Offset.zero) {
+      calculatedStartIndex = _klines.length > scaledVisibleCandles
+          ? _klines.length - scaledVisibleCandles
+          : 0;
+    } else {
+      // Ограничиваем startIndex в пределах доступных данных
+      calculatedStartIndex =
+          calculatedStartIndex.clamp(0, _klines.length - scaledVisibleCandles);
+    }
+
+    final endIndex =
+        (calculatedStartIndex + scaledVisibleCandles).clamp(0, _klines.length);
+    final startIndex = calculatedStartIndex;
+    final displayedKlines = _klines.sublist(startIndex, endIndex);
 
     // Пересчитываем min/max для отображаемых свечей
     double displayMinPrice = displayedKlines
@@ -2936,10 +3155,70 @@ class _TradeScreenState extends State<TradeScreen>
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: AppTheme.backgroundCard,
+        color: const Color.fromARGB(255, 0, 0, 0),
         borderRadius: BorderRadius.circular(12),
       ),
       child: GestureDetector(
+        // Масштабирование (pinch-to-zoom)
+        onScaleStart: (details) {
+          _lastScale = _scaleFactor;
+        },
+        onScaleUpdate: (details) {
+          if (_klines.isEmpty) return;
+
+          setState(() {
+            final chartWidth = MediaQuery.of(context).size.width - 32 - 60;
+
+            // Если один палец - это прокрутка (pan)
+            if (details.pointerCount == 1) {
+              final scaledVisibleCandles =
+                  (50 / _scaleFactor).round().clamp(10, _klines.length);
+
+              // Вычисляем смещение в свечах
+              final deltaCandles = (details.focalPointDelta.dx /
+                      chartWidth *
+                      scaledVisibleCandles)
+                  .round();
+
+              // Обновляем startIndex
+              _chartStartIndex = (_chartStartIndex - deltaCandles)
+                  .clamp(0, _klines.length - scaledVisibleCandles);
+              _visibleCandles = scaledVisibleCandles;
+            }
+            // Если два пальца - это масштабирование (zoom)
+            else if (details.pointerCount == 2) {
+              // Обновляем масштаб
+              _scaleFactor = (_lastScale * details.scale).clamp(0.5, 5.0);
+
+              // Пересчитываем количество видимых свечей
+              final baseVisibleCandles = 50;
+              final scaledVisibleCandles = (baseVisibleCandles / _scaleFactor)
+                  .round()
+                  .clamp(10, _klines.length);
+
+              // Если мы в конце графика, остаемся в конце
+              if (_chartStartIndex == 0 &&
+                  _panOffset == Offset.zero &&
+                  _klines.length > scaledVisibleCandles) {
+                _chartStartIndex = _klines.length - scaledVisibleCandles;
+              } else {
+                // Сохраняем текущую позицию при масштабировании
+                final currentCenter =
+                    _chartStartIndex + (_visibleCandles / 2).round();
+                _chartStartIndex = (currentCenter - scaledVisibleCandles / 2)
+                    .round()
+                    .clamp(0, _klines.length - scaledVisibleCandles);
+              }
+              _visibleCandles = scaledVisibleCandles;
+            }
+          });
+        },
+        onScaleEnd: (details) {
+          // Сбрасываем pan offset после окончания жеста
+          setState(() {
+            _panOffset = Offset.zero;
+          });
+        },
         onTapDown: (details) {
           final chartWidth = MediaQuery.of(context).size.width -
               32 -
@@ -2989,25 +3268,31 @@ class _TradeScreenState extends State<TradeScreen>
         child: Stack(
           children: [
             // Candlestick chart
-            CustomPaint(
-              size: Size.infinite,
-              painter: CandlestickPainter(
-                klines: displayedKlines,
-                minPrice: displayMinPrice,
-                maxPrice: displayMaxPrice,
-                ma7Spots: displayMa7Spots,
-                ma14Spots: displayMa14Spots,
-                ma28Spots: displayMa28Spots,
-                ema12Spots: displayEma12Spots,
-                ema26Spots: displayEma26Spots,
-                bollUpperSpots: displayBollUpperSpots,
-                bollMiddleSpots: displayBollMiddleSpots,
-                bollLowerSpots: displayBollLowerSpots,
-                sarSpots: displaySarSpots,
-                selectedIndicators: _selectedIndicators,
-                selectedIndex: _selectedCandleIndex != null
-                    ? _selectedCandleIndex! - startIndex
-                    : null,
+            RepaintBoundary(
+              child: ClipRect(
+                child: CustomPaint(
+                  key: ValueKey(
+                      'chart_${_klines.length}_${_klines.isNotEmpty ? _klines.last['timestamp'] : 0}'),
+                  size: Size.infinite,
+                  painter: CandlestickPainter(
+                    klines: displayedKlines,
+                    minPrice: displayMinPrice,
+                    maxPrice: displayMaxPrice,
+                    ma7Spots: displayMa7Spots,
+                    ma14Spots: displayMa14Spots,
+                    ma28Spots: displayMa28Spots,
+                    ema12Spots: displayEma12Spots,
+                    ema26Spots: displayEma26Spots,
+                    bollUpperSpots: displayBollUpperSpots,
+                    bollMiddleSpots: displayBollMiddleSpots,
+                    bollLowerSpots: displayBollLowerSpots,
+                    sarSpots: displaySarSpots,
+                    selectedIndicators: _selectedIndicators,
+                    selectedIndex: _selectedCandleIndex != null
+                        ? _selectedCandleIndex! - startIndex
+                        : null,
+                  ),
+                ),
               ),
             ),
             // Y-axis labels (right side)
@@ -8095,6 +8380,9 @@ class CandlestickPainter extends CustomPainter {
     final candleWidth = chartWidth / klines.length * 1;
     final spacing = chartWidth / klines.length;
 
+    // Ограничиваем область рисования границами графика
+    canvas.clipRect(Rect.fromLTWH(0, 0, chartWidth, chartHeight));
+
     // Рисуем сетку
     final gridPaint = Paint()
       ..color = AppTheme.borderColor.withValues(alpha: 0.3)
@@ -8160,16 +8448,20 @@ class CandlestickPainter extends CustomPainter {
       final low = kline['low'] as double;
       final close = kline['close'] as double;
 
-      final x = i * spacing + spacing / 2;
+      final x = (i * spacing + spacing / 2).clamp(0.0, chartWidth);
       final isUp = close >= open;
 
       final openY =
-          chartHeight - ((open - minPrice) / priceRange * chartHeight);
+          (chartHeight - ((open - minPrice) / priceRange * chartHeight))
+              .clamp(0.0, chartHeight);
       final closeY =
-          chartHeight - ((close - minPrice) / priceRange * chartHeight);
+          (chartHeight - ((close - minPrice) / priceRange * chartHeight))
+              .clamp(0.0, chartHeight);
       final highY =
-          chartHeight - ((high - minPrice) / priceRange * chartHeight);
-      final lowY = chartHeight - ((low - minPrice) / priceRange * chartHeight);
+          (chartHeight - ((high - minPrice) / priceRange * chartHeight))
+              .clamp(0.0, chartHeight);
+      final lowY = (chartHeight - ((low - minPrice) / priceRange * chartHeight))
+          .clamp(0.0, chartHeight);
 
       final color = isUp ? AppTheme.primaryGreen : AppTheme.primaryRed;
       final wickPaint = Paint()
@@ -8229,13 +8521,17 @@ class CandlestickPainter extends CustomPainter {
 
     for (final spot in spots) {
       final x = spot.x * spacing + spacing / 2;
+      // Ограничиваем координаты в пределах графика
+      final clampedX = x.clamp(0.0, width);
       final y = height - ((spot.y - minPrice) / priceRange * height);
+      // Ограничиваем координату Y в пределах графика
+      final clampedY = y.clamp(0.0, height);
 
       if (isFirst) {
-        path.moveTo(x, y);
+        path.moveTo(clampedX, clampedY);
         isFirst = false;
       } else {
-        path.lineTo(x, y);
+        path.lineTo(clampedX, clampedY);
       }
     }
 
@@ -8256,17 +8552,67 @@ class CandlestickPainter extends CustomPainter {
       final x = spot.x * spacing + spacing / 2;
       final y = height - ((spot.y - minPrice) / priceRange * height);
 
-      // Рисуем точку SAR
-      canvas.drawCircle(Offset(x, y), 2, pointPaint);
+      // Ограничиваем координаты в пределах графика
+      final clampedX = x.clamp(0.0, width);
+      final clampedY = y.clamp(0.0, height);
+
+      // Рисуем точку SAR только если она в пределах графика
+      if (clampedX >= 0 &&
+          clampedX <= width &&
+          clampedY >= 0 &&
+          clampedY <= height) {
+        canvas.drawCircle(Offset(clampedX, clampedY), 2, pointPaint);
+      }
     }
   }
 
   @override
   bool shouldRepaint(CandlestickPainter oldDelegate) {
-    return oldDelegate.klines != klines ||
-        oldDelegate.minPrice != minPrice ||
-        oldDelegate.maxPrice != maxPrice ||
-        oldDelegate.selectedIndicators != selectedIndicators;
+    // Всегда перерисовываем при изменении данных для реального времени
+    if (oldDelegate.klines.length != klines.length) return true;
+    if (oldDelegate.selectedIndicators != selectedIndicators) return true;
+    if ((oldDelegate.minPrice - minPrice).abs() > 0.01 ||
+        (oldDelegate.maxPrice - maxPrice).abs() > 0.01) return true;
+
+    // Проверяем, изменилась ли последняя свеча (для плавного обновления)
+    if (klines.isNotEmpty && oldDelegate.klines.isNotEmpty) {
+      final lastOld = oldDelegate.klines.last;
+      final lastNew = klines.last;
+
+      // Сравниваем все поля свечи с учетом погрешности для double
+      final oldClose = lastOld['close'] as double;
+      final newClose = lastNew['close'] as double;
+      final oldHigh = lastOld['high'] as double;
+      final newHigh = lastNew['high'] as double;
+      final oldLow = lastOld['low'] as double;
+      final newLow = lastNew['low'] as double;
+      final oldOpen = lastOld['open'] as double;
+      final newOpen = lastNew['open'] as double;
+
+      if (lastOld['timestamp'] != lastNew['timestamp'] ||
+          (oldClose - newClose).abs() > 0.0001 ||
+          (oldHigh - newHigh).abs() > 0.0001 ||
+          (oldLow - newLow).abs() > 0.0001 ||
+          (oldOpen - newOpen).abs() > 0.0001) {
+        return true;
+      }
+    }
+
+    // Проверяем изменения в индикаторах
+    if (oldDelegate.ma7Spots.length != ma7Spots.length ||
+        oldDelegate.ma14Spots.length != ma14Spots.length ||
+        oldDelegate.ma28Spots.length != ma28Spots.length) {
+      return true;
+    }
+
+    // Проверяем изменения в последних точках индикаторов
+    if (ma7Spots.isNotEmpty && oldDelegate.ma7Spots.isNotEmpty) {
+      final lastMa7Old = oldDelegate.ma7Spots.last;
+      final lastMa7New = ma7Spots.last;
+      if ((lastMa7Old.y - lastMa7New.y).abs() > 0.0001) return true;
+    }
+
+    return false;
   }
 }
 

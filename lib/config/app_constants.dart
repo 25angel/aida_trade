@@ -130,6 +130,8 @@ class AppConstants {
   // SharedPreferences ключи
   static const String prefsKeyUseMockData = 'use_mock_portfolio_data';
   static const String prefsKeyFavoriteCoins = 'favorite_coins_';
+  static const String prefsKeyBalanceAtStartOfDay = 'balance_at_start_of_day';
+  static const String prefsKeyLastDayChecked = 'last_day_checked';
 
   // UI константы
   static const double defaultBorderRadius = 8.0;
@@ -138,4 +140,3 @@ class AppConstants {
   static const double iconSize = 24.0;
   static const double smallIconSize = 18.0;
 }
-

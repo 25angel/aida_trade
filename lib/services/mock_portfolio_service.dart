@@ -39,8 +39,13 @@ class MockPortfolioService {
         // или значение по умолчанию
         _useMockData = _useMockData;
       }
+
+      // Инициализируем баланс на начало дня
+      await _initializeStartOfDayBalance();
     } catch (e) {
       // Если ошибка, оставляем текущее значение _useMockData
+      // Инициализируем баланс на начало дня даже при ошибке
+      await _initializeStartOfDayBalance();
     }
   }
 
@@ -365,21 +370,231 @@ class MockPortfolioService {
   static Future<void> addFundingBalance(double amount) async {
     if (amount > 0) {
       _currentFundingUsdt += amount;
+      final balanceAfter = _calculateTotalUsd();
+
+      // Если баланс на начало дня еще не установлен или равен 0, устанавливаем его при первом добавлении баланса
+      if (!_startOfDayInitialized ||
+          _balanceAtStartOfDay == null ||
+          _balanceAtStartOfDay == 0.0) {
+        final now = DateTime.now();
+        final today = DateTime(now.year, now.month, now.day);
+
+        // Устанавливаем баланс на начало дня = баланс после добавления (но без нереализованного P&L)
+        final balanceAtStart = balanceAfter - _unrealizedPnl;
+        _balanceAtStartOfDay =
+            balanceAtStart > 0 ? balanceAtStart : balanceAfter;
+        _lastDayChecked = today;
+        _startOfDayInitialized = true;
+
+        // Сохраняем в SharedPreferences
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setDouble(
+              AppConstants.prefsKeyBalanceAtStartOfDay, _balanceAtStartOfDay!);
+          await prefs.setString(
+              AppConstants.prefsKeyLastDayChecked, today.toIso8601String());
+        } catch (e) {
+          // Игнорируем ошибки сохранения
+        }
+      }
+
       // Уведомляем об изменении баланса
       balanceNotifier.value = unifiedTradingBalance;
     }
   }
 
-  // P&L за сегодня (моковое значение)
-  // Рассчитывается реалистично относительно общего P&L за 180 дней (+847)
-  // Средний дневной P&L = 847/180 ≈ 4.7 USD, за сегодня может быть от 0 до ~30 USD
+  // Баланс на начало дня (для расчета P&L за сегодня)
+  static double? _balanceAtStartOfDay;
+  static DateTime? _lastDayChecked;
+  static bool _startOfDayInitialized = false;
+
+  /// Инициализация баланса на начало дня (вызывается при старте приложения)
+  static Future<void> _initializeStartOfDayBalance() async {
+    if (_startOfDayInitialized) return;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+
+      // Загружаем сохраненную дату последней проверки
+      final lastDayCheckedString =
+          prefs.getString(AppConstants.prefsKeyLastDayChecked);
+      DateTime? savedLastDayChecked;
+      if (lastDayCheckedString != null) {
+        savedLastDayChecked = DateTime.tryParse(lastDayCheckedString);
+      }
+
+      // Загружаем сохраненный баланс на начало дня
+      final savedBalance =
+          prefs.getDouble(AppConstants.prefsKeyBalanceAtStartOfDay);
+
+      // Если это новый день или баланс не был сохранен, устанавливаем баланс на начало дня
+      if (savedLastDayChecked == null ||
+          savedLastDayChecked.year != today.year ||
+          savedLastDayChecked.month != today.month ||
+          savedLastDayChecked.day != today.day) {
+        // Новый день - НЕ устанавливаем баланс на начало дня, если текущий баланс = 0
+        // Баланс на начало дня будет установлен при первом добавлении баланса
+        final currentBalance = _calculateTotalUsd();
+        if (currentBalance > 0) {
+          // Если баланс уже есть, устанавливаем баланс на начало дня
+          final balanceAtStart = currentBalance - _unrealizedPnl;
+          _balanceAtStartOfDay =
+              balanceAtStart > 0 ? balanceAtStart : currentBalance;
+          _lastDayChecked = today;
+
+          // Сохраняем в SharedPreferences
+          await prefs.setDouble(
+              AppConstants.prefsKeyBalanceAtStartOfDay, _balanceAtStartOfDay!);
+          await prefs.setString(
+              AppConstants.prefsKeyLastDayChecked, today.toIso8601String());
+        } else {
+          // Баланс = 0, не устанавливаем баланс на начало дня
+          // Он будет установлен при первом добавлении баланса
+          _balanceAtStartOfDay = null;
+          _lastDayChecked = today;
+        }
+      } else {
+        // Тот же день - проверяем текущий баланс
+        final currentBalance = _calculateTotalUsd();
+        if (currentBalance > 0) {
+          // Если баланс есть, используем сохраненный баланс на начало дня
+          _balanceAtStartOfDay = savedBalance;
+          _lastDayChecked = savedLastDayChecked;
+        } else {
+          // Если текущий баланс = 0, не используем сохраненный баланс
+          // Баланс на начало дня будет установлен при первом добавлении баланса
+          _balanceAtStartOfDay = null;
+          _lastDayChecked = savedLastDayChecked;
+
+          // Очищаем сохраненный баланс, так как он неактуален
+          await prefs.remove(AppConstants.prefsKeyBalanceAtStartOfDay);
+        }
+      }
+
+      _startOfDayInitialized = true;
+    } catch (e) {
+      // В случае ошибки не устанавливаем баланс на начало дня, если баланс = 0
+      final currentBalance = _calculateTotalUsd();
+      if (currentBalance > 0) {
+        _balanceAtStartOfDay = currentBalance;
+      } else {
+        _balanceAtStartOfDay = null;
+      }
+      _lastDayChecked = DateTime.now();
+      _startOfDayInitialized = true;
+    }
+  }
+
+  // P&L за сегодня - рассчитывается как разница между текущим балансом и балансом на начало дня
   static double get pnlToday {
-    // Используем фиксированный seed для стабильности, но с небольшими вариациями
-    final random = math.Random(DateTime.now().day); // Меняется каждый день
-    // Средний дневной P&L за 180 дней ≈ 4.7 USD
-    // За сегодня может быть от -10 до +30 USD (реалистичные колебания)
-    return (random.nextDouble() * 40 - 10)
-        .clamp(-10.0, 30.0); // От -10 до +30 USD
+    // Инициализируем, если еще не инициализировано
+    if (!_startOfDayInitialized) {
+      _initializeStartOfDayBalance();
+    }
+
+    // Если баланс на начало дня еще не установлен (баланс был 0 при запуске), возвращаем 0
+    if (_balanceAtStartOfDay == null) {
+      return 0.0;
+    }
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    // Если это новый день, обновляем баланс на начало дня (только если текущий баланс > 0)
+    if (_lastDayChecked == null ||
+        _lastDayChecked!.year != today.year ||
+        _lastDayChecked!.month != today.month ||
+        _lastDayChecked!.day != today.day) {
+      final currentBalance = _calculateTotalUsd();
+      if (currentBalance > 0) {
+        // Баланс на начало дня = текущий баланс - нереализованный P&L
+        final balanceAtStart = currentBalance - _unrealizedPnl;
+        _balanceAtStartOfDay =
+            balanceAtStart > 0 ? balanceAtStart : currentBalance;
+        _lastDayChecked = today;
+
+        // Сохраняем в SharedPreferences асинхронно
+        SharedPreferences.getInstance().then((prefs) async {
+          await prefs.setDouble(
+              AppConstants.prefsKeyBalanceAtStartOfDay, _balanceAtStartOfDay!);
+          await prefs.setString(
+              AppConstants.prefsKeyLastDayChecked, today.toIso8601String());
+        });
+      } else {
+        // Баланс = 0, не устанавливаем баланс на начало дня
+        _balanceAtStartOfDay = null;
+        _lastDayChecked = today;
+      }
+    }
+
+    // Рассчитываем P&L за сегодня как разницу между текущим балансом и балансом на начало дня
+    final currentBalance = _calculateTotalUsd();
+    final startBalance = _balanceAtStartOfDay ?? currentBalance;
+    final pnl = currentBalance - startBalance;
+
+    return pnl;
+  }
+
+  /// Получить баланс на начало дня (для расчета процента P&L)
+  static double get balanceAtStartOfDay {
+    // Инициализируем, если еще не инициализировано
+    if (!_startOfDayInitialized) {
+      _initializeStartOfDayBalance();
+    }
+
+    // Если баланс на начало дня еще не установлен, возвращаем текущий баланс (чтобы процент был 0%)
+    if (_balanceAtStartOfDay == null) {
+      return _calculateTotalUsd();
+    }
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    // Если это новый день, обновляем баланс на начало дня (только если текущий баланс > 0)
+    if (_lastDayChecked == null ||
+        _lastDayChecked!.year != today.year ||
+        _lastDayChecked!.month != today.month ||
+        _lastDayChecked!.day != today.day) {
+      final currentBalance = _calculateTotalUsd();
+      if (currentBalance > 0) {
+        // Баланс на начало дня = текущий баланс - нереализованный P&L
+        final balanceAtStart = currentBalance - _unrealizedPnl;
+        _balanceAtStartOfDay =
+            balanceAtStart > 0 ? balanceAtStart : currentBalance;
+        _lastDayChecked = today;
+
+        // Сохраняем в SharedPreferences асинхронно
+        SharedPreferences.getInstance().then((prefs) async {
+          await prefs.setDouble(
+              AppConstants.prefsKeyBalanceAtStartOfDay, _balanceAtStartOfDay!);
+          await prefs.setString(
+              AppConstants.prefsKeyLastDayChecked, today.toIso8601String());
+        });
+      } else {
+        // Баланс = 0, не устанавливаем баланс на начало дня
+        _balanceAtStartOfDay = null;
+        _lastDayChecked = today;
+      }
+    }
+
+    return _balanceAtStartOfDay ?? _calculateTotalUsd();
+  }
+
+  /// Сбросить баланс на начало дня (для тестирования или принудительного обновления)
+  static Future<void> resetStartOfDayBalance() async {
+    _balanceAtStartOfDay = null;
+    _lastDayChecked = null;
+    _startOfDayInitialized = false;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(AppConstants.prefsKeyBalanceAtStartOfDay);
+      await prefs.remove(AppConstants.prefsKeyLastDayChecked);
+    } catch (e) {
+      // Игнорируем ошибки
+    }
   }
 
   // Расчет общего баланса в USD (использует текущие цены из кэша)
@@ -873,14 +1088,14 @@ class MockPortfolioService {
     }
 
     // Unified Trading Account - только USDT (SOL и LTC убраны, они теперь в позициях)
-    // USDT в Unified Trading (только если есть баланс или нереализованный P&L)
-    // Включаем нереализованный P&L в USDT для Unified Trading аккаунта
-    final unifiedUsdtWithPnl = _currentUnifiedUsdt + _unrealizedPnl;
-    if (_currentUnifiedUsdt > 0 || _unrealizedPnl != 0.0) {
+    // USDT в Unified Trading (только если есть баланс)
+    // USDT - стабильная монета, equity = только баланс USDT, без нереализованного P&L
+    // Нереализованный P&L - это P&L от позиций, а не от USDT
+    if (_currentUnifiedUsdt > 0) {
       coins.add({
         'coin': 'USDT',
-        'equity': unifiedUsdtWithPnl, // Включаем нереализованный P&L
-        'usdValue': unifiedUsdtWithPnl, // USDT = 1 USD, включая P&L
+        'equity': _currentUnifiedUsdt, // Только баланс USDT, без P&L
+        'usdValue': _currentUnifiedUsdt, // USDT = 1 USD
         'accountType': 'UNIFIED',
       });
     }

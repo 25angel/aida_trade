@@ -195,6 +195,7 @@ class _HomeMainScreenState extends State<HomeMainScreen> {
       if (!mounted) return;
       setState(() {
         _totalUsd = MockPortfolioService.totalUsd;
+        // P&L за сегодня теперь рассчитывается на основе баланса на начало дня
         _pnlToday = MockPortfolioService.pnlToday;
       });
       return;
@@ -280,8 +281,8 @@ class _HomeMainScreenState extends State<HomeMainScreen> {
                 })
             .toList();
       });
-      await prefs.setString(
-          '${AppConstants.prefsKeyFavoriteCoins}$userId', json.encode(dataToSave));
+      await prefs.setString('${AppConstants.prefsKeyFavoriteCoins}$userId',
+          json.encode(dataToSave));
     } catch (e) {
       // Ошибка сохранения
     }

@@ -61,6 +61,8 @@ class _WalletScreenState extends State<WalletScreen>
         _availableUsd = MockPortfolioService.availableUsd;
         _usedUsd = MockPortfolioService.usedUsd;
         _fundingBalance = MockPortfolioService.fundingBalance;
+        // P&L за сегодня теперь рассчитывается на основе баланса на начало дня
+        _pnlToday = MockPortfolioService.pnlToday;
       });
     }
   }
@@ -103,6 +105,7 @@ class _WalletScreenState extends State<WalletScreen>
         _usedUsd = MockPortfolioService.usedUsd;
         _fundingBalance = MockPortfolioService.fundingBalance;
         _unifiedTradingBalance = MockPortfolioService.unifiedTradingBalance;
+        // P&L за сегодня теперь рассчитывается на основе баланса на начало дня
         _pnlToday = MockPortfolioService.pnlToday;
         _isLoading = false;
       });
@@ -391,7 +394,7 @@ class _WalletScreenState extends State<WalletScreen>
                                   ),
                                 ),
                                 Text(
-                                  '${_formatBalance(_pnlToday)} USD(${_pnlToday >= 0 ? '+' : ''}${_pnlToday.toStringAsFixed(2)}%)',
+                                  '${_formatBalance(_pnlToday)} USD(${_getPnlTodayPercent()})',
                                   style: TextStyle(
                                     color: _pnlToday >= 0
                                         ? AppTheme.primaryGreen
@@ -696,6 +699,23 @@ class _WalletScreenState extends State<WalletScreen>
     }
   }
 
+  String _getPnlTodayPercent() {
+    if (!MockPortfolioService.useMockData) return '0.00%';
+    final pnlToday = _pnlToday;
+    // Процент рассчитывается от баланса на начало дня, а не от текущего баланса
+    final balanceAtStartOfDay = MockPortfolioService.balanceAtStartOfDay;
+    if (balanceAtStartOfDay == 0 ||
+        balanceAtStartOfDay.isNaN ||
+        balanceAtStartOfDay.isInfinite) {
+      return '0.00%';
+    }
+    final percent = (pnlToday / balanceAtStartOfDay) * 100;
+    if (percent.isNaN || percent.isInfinite) {
+      return '0.00%';
+    }
+    return '${percent >= 0 ? '+' : ''}${percent.toStringAsFixed(2)}%';
+  }
+
   Future<void> _handleLogout() async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -941,8 +961,9 @@ class _WalletScreenState extends State<WalletScreen>
                 Text(
                   '${pnl >= 0 ? '+' : ''}${_formatBalance(pnl)}',
                   style: TextStyle(
-                    color:
-                        pnl >= 0 ? AppTheme.primaryGreen : AppTheme.primaryRed,
+                    color: pnl >= 0
+                        ? const Color.fromARGB(255, 135, 134, 134)
+                        : const Color.fromARGB(255, 135, 134, 134),
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
                   ),
@@ -951,8 +972,9 @@ class _WalletScreenState extends State<WalletScreen>
                 Text(
                   '${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toStringAsFixed(2)}%',
                   style: TextStyle(
-                    color:
-                        pnl >= 0 ? AppTheme.primaryGreen : AppTheme.primaryRed,
+                    color: pnl >= 0
+                        ? const Color.fromARGB(255, 135, 134, 134)
+                        : const Color.fromARGB(255, 135, 134, 134),
                     fontSize: 12,
                   ),
                 ),

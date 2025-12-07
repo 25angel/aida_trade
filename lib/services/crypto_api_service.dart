@@ -1005,8 +1005,9 @@ class CryptoApiService {
         throw Exception('Failed to load klines: ${response.statusCode}');
       }
     } catch (e) {
-      // Возвращаем моковые данные в случае ошибки
-      return _getMockKlines(limit);
+      // Не возвращаем моковые данные - используем только реальные от Bybit
+      print('Error loading klines: $e');
+      rethrow;
     }
   }
 
